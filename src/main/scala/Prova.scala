@@ -1,12 +1,12 @@
+import org.apache.spark
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.ml.fpm.{FPGrowth, FPGrowthModel}
 import spire.math.QuickSort.limit
-
 import java.io.IOException
 import java.nio.file.{Files, Paths}
 import java.nio.charset.StandardCharsets
-import scala.collection.immutable.Nil.sortBy
+
 
 object Prova extends cask.MainRoutes {
 
@@ -75,7 +75,6 @@ object Prova extends cask.MainRoutes {
 
 
 
-
   @cask.get("/topNProdotti/:num")
   def topNprodottiPiuVenduti(num: Int): cask.Response[String] = {
     val topNprodotti = ordiniProdotti
@@ -89,6 +88,7 @@ object Prova extends cask.MainRoutes {
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
+
 /*
   @cask.options("/topNProdotti/:num")
   def optionsTopNProdotti(): cask.Response[String] = {
@@ -104,7 +104,6 @@ object Prova extends cask.MainRoutes {
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
-
 
 
   def prodottiPerOgniCorridoio(): DataFrame = {
@@ -133,7 +132,6 @@ object Prova extends cask.MainRoutes {
     aggiungiCORS(rispostaJson)
   }
 
-
   @cask.get("/prodottoPiuVendutoPerAisleSpecifico/:aisleId")
   def prodottoPiuVendutoPerCorridoioSpecifico(aisleId: Int): cask.Response[String] = {
     val prodFiltrati = ordiniProdotti
@@ -149,7 +147,6 @@ object Prova extends cask.MainRoutes {
     aggiungiCORS(rispostaJson)
   }
 
-
   @cask.get("/topOrderDay")
   def giornoConPiuOrdini(): cask.Response[String] = {
     val giornoPiuOrdini = infoOrdini.groupBy("order_dow")
@@ -160,7 +157,6 @@ object Prova extends cask.MainRoutes {
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
-
 
   @cask.get("/posizioneFrequenteProdottoNelCarrello/:productId")
   def posizioneFrequenteProdottoCarrello(productId: Int): cask.Response[String] = {
@@ -175,8 +171,28 @@ object Prova extends cask.MainRoutes {
     aggiungiCORS(rispostaJson)
   }
 
+  @cask.get("/analizzaUtente/:utente")
+  def analizzaUtente(utente: String): cask.Response[String] = {
+    val ordiniUtente = infoOrdini.filter($"user_id" === utente)
+    // Unisci gli ordini con i prodotti per ottenere informazioni sui prodotti acquistati
+    val prodottiAcquistati = ordiniUtente
+      .join(ordiniProdotti, "order_id") // Unisci con la tabella ordini_prodotti per ottenere i dettagli sui prodotti
+      .join(prodotti, "product_id")    // Unisci con la tabella prodotti per ottenere il nome del prodotto
+      .select("user_id","order_id", "product_name", "order_dow", "order_hour_of_day")  // Seleziona le colonne rilevanti
+    // Raggruppa i prodotti acquistati per l'utente e conta le occorrenze di ciascun prodotto
+    val prodottiRaggruppati = prodottiAcquistati
+      .groupBy("user_id","product_name")
+      .agg(count("product_name").alias("numero_acquisti"))
+      .orderBy(desc("numero_acquisti")) // Ordina i prodotti per numero di acquisti
 
-@cask.get("/regoleAssociative")
+    val rispostaJson = convertiRisposta(prodottiRaggruppati)
+    scriviFile(rispostaJson)
+    aggiungiCORS(rispostaJson)
+  }
+
+
+
+  @cask.get("/regoleAssociative")
 def regoleAssociative(): cask.Response[String] = {
   val train = ss.read.options(Map("inferSchema" -> "true", "header" -> "true"))
     .csv("src/main/data/order_products__train.csv")
@@ -191,18 +207,43 @@ def regoleAssociative(): cask.Response[String] = {
     .setItemsCol("items")
     .setMinSupport(0.001)
     .setMinConfidence(0.4)
-  val model = fpgrowth.fit(dataTrain)
+  modello = fpgrowth.fit(dataTrain)
 
   // Estrai le regole associative
-  val rules = model.associationRules
-//  rules=rules.withColumn("HConfidence",col("support")/greatest(col("antecedentSupport"), col("consequentSupport")))
-//  val h_conf_threshold = 0.7
-//  val filtered_rules = rules.filter(col("h_confidence") >= h_conf_threshold)
+  val rules = modello.associationRules
 
   val rispostaJson=convertiRisposta(rules)
   scriviFile(rispostaJson)
   aggiungiCORS(rispostaJson)
 }
+
+  @cask.get("/predizione")
+  def predizione(dati: String): cask.Response[String] = {
+    val listaDati: Seq[String] = dati.split(",").map(_.trim).toSeq
+    if (modello == null) {
+      regoleAssociative()
+    }
+    val ifThen = modello.associationRules
+    // Filtra le regole di associazione dove tutti gli antecedenti sono presenti nei dati
+    val proposte = ifThen.filter { x =>
+      x.getAs[Seq[String]]("antecedent").forall(listaDati.contains)
+    }
+    // Ordina in base alla confidenza e limita a 5 proposte
+    val finale = proposte.sort(col("confidence").desc).limit(5)
+    //finale.show()
+    // Estrai direttamente i conseguenti dalle regole e uniscili in un set
+    val proposals = finale.collect().flatMap { rule =>
+      val consequent = rule.getAs[Seq[String]]("consequent")
+      consequent
+    }.toSet
+    // Filtra le proposte per rimuovere quelle già presenti nei dati originali
+    val nonTrivialProposals = proposals.filterNot(listaDati.contains)
+
+    val rdd = sc.parallelize(nonTrivialProposals.toSeq)
+    val dataframe = rdd.toDF("suggestion")
+    val rispostaJson= convertiRisposta(dataframe)
+    aggiungiCORS(rispostaJson)
+  }
 
   def scriviFile(content: String): Unit = {
     try {
@@ -216,16 +257,17 @@ def regoleAssociative(): cask.Response[String] = {
 
 @cask.get("/chiediAchat")
 def chiediAChat():cask.Response[String]= {
-/*
+
  //leggere il contenuto del file
   val filename = "src/main/scala/ultimaQuery.txt"
   val content = new String(Files.readAllBytes(Paths.get(filename)), StandardCharsets.UTF_8)
-  val messaggio="Analizzami in modo approfondito questi dati che provengono dal sito Instacart." + content
+  val messaggio="Analizzami in modo approfondito questi dati che provengono dal sito Instacart." + content +" non usare grassetto"
   val risposta=OpenAIClient.sendMessageToChatGPT(messaggio)
-
-*/
+/*
   Thread.sleep(3000)
   val risposta="Ciao, sono il tuo assistente digitale Iusis"
+
+ */
   aggiungiCORS(risposta)
 
 }
