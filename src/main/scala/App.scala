@@ -8,7 +8,7 @@ import java.nio.file.{Files, Paths}
 import java.nio.charset.StandardCharsets
 
 
-object Prova extends cask.MainRoutes {
+object App extends cask.MainRoutes {
 
   def aggiungiCORS(risposta: String): cask.Response[String] = {
     cask.Response(risposta, headers = Seq(
@@ -23,7 +23,7 @@ object Prova extends cask.MainRoutes {
     aggiungiCORS("")
   }
 
-  override def port: Int = 6969
+  override def port: Int = 6060
 
   // Initialize SparkSession
   val ss = SparkSession
@@ -33,46 +33,28 @@ object Prova extends cask.MainRoutes {
     .getOrCreate()
 
   import ss.implicits._
+
   val sc = ss.sparkContext
   val prodotti = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/products.csv")
   val dipartimenti = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/departments.csv")
   val corsie = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/aisles.csv")
   val ordiniProdotti = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/order_products__prior.csv")
     .union(ss.read.options(Map("inferSchema" -> "true", "header" -> "true")).csv("src/main/data/order_products__train.csv"))
-  val infoOrdini = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/orders.csv")
+  val ordini = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/orders.csv")
   sc.setLogLevel("ERROR")
 
   var modello: FPGrowthModel = null
 
-  // Default route to check server status
   @cask.get("/")
   def home(): cask.Response[String] = {
-    aggiungiCORS("Server is running on port 6969!")
+    aggiungiCORS("Il server è in esecuzione sulla porta &060")
   }
 
-  /*
-  @cask.get("/showData")
-  def showData(): String = {
-    val sb = new StringBuilder
-    sb.append("Products Schema: \n")
-    sb.append(prodotti.schema.treeString).append("\n")
-    sb.append("Departments Schema: \n")
-    sb.append(dipartimenti.schema.treeString).append("\n")
-    sb.append("Aisles Schema: \n")
-    sb.append(corsie.schema.treeString).append("\n")
-    sb.append("Orders Products Schema: \n")
-    sb.append(ordiniProdotti.schema.treeString).append("\n")
-    sb.append("Orders Info Schema: \n")
-    sb.append(infoOrdini.schema.treeString).append("\n")
-    sb.toString()
-  }
-   */
 
-  def convertiRisposta(dataframe: DataFrame): String = {
+  def convertiRispostaInJson(dataframe: DataFrame): String = {
     val array = dataframe.toJSON.collect()
     array.mkString("[", ",", "]")
   }
-
 
 
   @cask.get("/topNProdotti/:num")
@@ -83,28 +65,18 @@ object Prova extends cask.MainRoutes {
       .count()                           // Conta il numero di vendite per prodotto
       .orderBy(desc("count"))            // Ordina in ordine decrescente per conteggio
       .limit(num)
-
-    val rispostaJson = convertiRisposta(topNprodotti)
+    val rispostaJson = convertiRispostaInJson(topNprodotti)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
-
-/*
-  @cask.options("/topNProdotti/:num")
-  def optionsTopNProdotti(): cask.Response[String] = {
-    aggiungiCORS("")
-  }
-
- */
 
   @cask.get("/ordiniOre")
   def ordiniOre():cask.Response[String]={
-    val df_ore=infoOrdini.groupBy("order_hour_of_day").count().orderBy("order_hour_of_day")
-    val rispostaJson=convertiRisposta(df_ore)
+    val df_ore=ordini.groupBy("order_hour_of_day").count().orderBy("order_hour_of_day")
+    val rispostaJson=convertiRispostaInJson(df_ore)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
-
 
   def prodottiPerOgniCorridoio(): DataFrame = {
     val prodOgniCorridoio = ordiniProdotti
@@ -114,7 +86,6 @@ object Prova extends cask.MainRoutes {
       .orderBy(col("aisle_id"), desc("vendite"))  // Ordiniamo per aisle_id e vendite in ordine decrescente
     prodOgniCorridoio
   }
-
 
   @cask.get("/topProdottiPerAisle")
   def prodottoPiuVendutoPerCorridoio(): cask.Response[String] = {
@@ -127,7 +98,7 @@ object Prova extends cask.MainRoutes {
       .filter(col("vendite") === col("vendite_piu_alte"))
       .select("aisle_id", "product_name", "vendite").orderBy(col("aisle_id").asc)
 
-    val rispostaJson=convertiRisposta(prodottoPiuVenduto)
+    val rispostaJson=convertiRispostaInJson(prodottoPiuVenduto)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
@@ -142,38 +113,41 @@ object Prova extends cask.MainRoutes {
       .orderBy(desc("vendite"))
       .limit(1)
 
-    val rispostaJson=convertiRisposta(prodFiltrati)
+    val rispostaJson=convertiRispostaInJson(prodFiltrati)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
 
   @cask.get("/topOrderDay")
   def giornoConPiuOrdini(): cask.Response[String] = {
-    val giornoPiuOrdini = infoOrdini.groupBy("order_dow")
+    val giornoPiuOrdini = ordini.groupBy("order_dow")
       .agg(count("*").alias("ordiniTotali"))
       .orderBy(desc("ordiniTotali"))
 
-    val rispostaJson=convertiRisposta(giornoPiuOrdini)
+    val rispostaJson=convertiRispostaInJson(giornoPiuOrdini)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
 
-  @cask.get("/posizioneFrequenteProdottoNelCarrello/:productId")
-  def posizioneFrequenteProdottoCarrello(productId: Int): cask.Response[String] = {
-    val posPiuFrequente = ordiniProdotti.filter($"product_id" === productId)
-      .groupBy("add_to_cart_order")
-      .agg(count("*").alias("count"))
-      .orderBy(desc("count"))
-      .limit(1)
-
-    val rispostaJson=convertiRisposta(posPiuFrequente)
+  @cask.get("/numeroArticoliOrdine")
+  def numeroArticoliOrdine(): cask.Response[String] = {
+    val ordiniConProdotti = ordiniProdotti
+      .join(prodotti, "product_id")
+      .groupBy("order_id")
+      .agg(count("product_id").alias("numero_articoli"))
+      .orderBy(desc("numero_articoli"))
+    val distribuzioneArticoli = ordiniConProdotti
+      .groupBy("numero_articoli")
+      .count()
+      .orderBy(asc("numero_articoli"))
+    val rispostaJson = convertiRispostaInJson(distribuzioneArticoli)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
 
   @cask.get("/analizzaUtente/:utente")
   def analizzaUtente(utente: String): cask.Response[String] = {
-    val ordiniUtente = infoOrdini.filter($"user_id" === utente)
+    val ordiniUtente = ordini.filter($"user_id" === utente)
     // Unisci gli ordini con i prodotti per ottenere informazioni sui prodotti acquistati
     val prodottiAcquistati = ordiniUtente
       .join(ordiniProdotti, "order_id") // Unisci con la tabella ordini_prodotti per ottenere i dettagli sui prodotti
@@ -184,13 +158,10 @@ object Prova extends cask.MainRoutes {
       .groupBy("user_id","product_name")
       .agg(count("product_name").alias("numero_acquisti"))
       .orderBy(desc("numero_acquisti")) // Ordina i prodotti per numero di acquisti
-
-    val rispostaJson = convertiRisposta(prodottiRaggruppati)
+    val rispostaJson = convertiRispostaInJson(prodottiRaggruppati)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
-
-
 
   @cask.get("/regoleAssociative")
 def regoleAssociative(): cask.Response[String] = {
@@ -212,7 +183,7 @@ def regoleAssociative(): cask.Response[String] = {
   // Estrai le regole associative
   val rules = modello.associationRules
 
-  val rispostaJson=convertiRisposta(rules)
+  val rispostaJson=convertiRispostaInJson(rules)
   scriviFile(rispostaJson)
   aggiungiCORS(rispostaJson)
 }
@@ -223,25 +194,25 @@ def regoleAssociative(): cask.Response[String] = {
     if (modello == null) {
       regoleAssociative()
     }
-    val ifThen = modello.associationRules
+    val regole = modello.associationRules
     // Filtra le regole di associazione dove tutti gli antecedenti sono presenti nei dati
-    val proposte = ifThen.filter { x =>
+    val proposte = regole.filter { x =>
       x.getAs[Seq[String]]("antecedent").forall(listaDati.contains)
     }
     // Ordina in base alla confidenza e limita a 5 proposte
     val finale = proposte.sort(col("confidence").desc).limit(5)
-    //finale.show()
+
     // Estrai direttamente i conseguenti dalle regole e uniscili in un set
     val proposals = finale.collect().flatMap { rule =>
       val consequent = rule.getAs[Seq[String]]("consequent")
       consequent
     }.toSet
     // Filtra le proposte per rimuovere quelle già presenti nei dati originali
-    val nonTrivialProposals = proposals.filterNot(listaDati.contains)
+    val proposteFinali = proposals.filterNot(listaDati.contains)
 
-    val rdd = sc.parallelize(nonTrivialProposals.toSeq)
+    val rdd = sc.parallelize(proposteFinali.toSeq)
     val dataframe = rdd.toDF("suggestion")
-    val rispostaJson= convertiRisposta(dataframe)
+    val rispostaJson= convertiRispostaInJson(dataframe)
     aggiungiCORS(rispostaJson)
   }
 
@@ -257,19 +228,12 @@ def regoleAssociative(): cask.Response[String] = {
 
 @cask.get("/chiediAchat")
 def chiediAChat():cask.Response[String]= {
-
  //leggere il contenuto del file
   val filename = "src/main/scala/ultimaQuery.txt"
   val content = new String(Files.readAllBytes(Paths.get(filename)), StandardCharsets.UTF_8)
   val messaggio="Analizzami in modo approfondito questi dati che provengono dal sito Instacart." + content +" non usare grassetto"
   val risposta=OpenAIClient.sendMessageToChatGPT(messaggio)
-/*
-  Thread.sleep(3000)
-  val risposta="Ciao, sono il tuo assistente digitale Iusis"
-
- */
   aggiungiCORS(risposta)
-
 }
   initialize()
 }
