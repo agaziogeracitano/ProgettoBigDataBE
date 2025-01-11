@@ -10,11 +10,12 @@ import java.nio.charset.StandardCharsets
 
 object App extends cask.MainRoutes {
 
+  //per far comunicare front end e back end siccome si trovano su porte differenti
   def aggiungiCORS(risposta: String): cask.Response[String] = {
     cask.Response(risposta, headers = Seq(
-      "Access-Control-Allow-Origin" -> "*", // Permetti l'accesso da qualsiasi origine
-      "Access-Control-Allow-Methods" -> "GET, POST, OPTIONS", // Metodi consentiti
-      "Access-Control-Allow-Headers" -> "Content-Type" // Header consentiti
+      "Access-Control-Allow-Origin" -> "*", //in modo da permettere l'accesso da qualsiasi origine
+      "Access-Control-Allow-Methods" -> "GET, POST, OPTIONS", //sono i meetodi consentiti
+      "Access-Control-Allow-Headers" -> "Content-Type" //sono gli header consentiti
     ))
   }
 
@@ -25,32 +26,32 @@ object App extends cask.MainRoutes {
 
   override def port: Int = 6060
 
-  // Initialize SparkSession
-  val ss = SparkSession
+  //Inizializziamo una SparkSession
+  val sparkSession = SparkSession
     .builder()
-    .master("local[*]")
+    .master("local[*]") //usiamo tutti i core della macchina
     .appName("ProgettoBigData")
-    .getOrCreate()
+    .getOrCreate() //lo crea o lo restituisce perché ci può essere solo una sparkSession
 
-  import ss.implicits._
+  import sparkSession.implicits._
 
-  val sc = ss.sparkContext
-  val prodotti = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/products.csv")
-  val dipartimenti = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/departments.csv")
-  val corsie = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/aisles.csv")
-  val ordiniProdotti = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/order_products__prior.csv")
-    .union(ss.read.options(Map("inferSchema" -> "true", "header" -> "true")).csv("src/main/data/order_products__train.csv"))
-  val ordini = ss.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/orders.csv")
-  sc.setLogLevel("ERROR")
+  val sparkContext = sparkSession.sparkContext
+  val prodotti = sparkSession.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/products.csv")
+  val dipartimenti = sparkSession.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/departments.csv")
+  val corsie = sparkSession.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/aisles.csv")
+  val ordiniProdotti = sparkSession.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/order_products__prior.csv")
+    .union(sparkSession.read.options(Map("inferSchema" -> "true", "header" -> "true")).csv("src/main/data/order_products__train.csv"))
+  val ordini = sparkSession.read.options(Map("header" -> "true", "inferSchema" -> "true")).csv("src/main/data/orders.csv")
+  sparkContext.setLogLevel("ERROR")
 
   var modello: FPGrowthModel = null
 
   @cask.get("/")
   def home(): cask.Response[String] = {
-    aggiungiCORS("Il server è in esecuzione sulla porta &060")
+    aggiungiCORS("Il server è in esecuzione sulla porta 6060")
   }
 
-
+  //metodo che converte un dataframe in un Json
   def convertiRispostaInJson(dataframe: DataFrame): String = {
     val array = dataframe.toJSON.collect()
     array.mkString("[", ",", "]")
@@ -60,11 +61,11 @@ object App extends cask.MainRoutes {
   @cask.get("/topNProdotti/:num")
   def topNprodottiPiuVenduti(num: Int): cask.Response[String] = {
     val topNprodotti = ordiniProdotti
-      .join(prodotti, Seq("product_id")) // Join sulla colonna "product_id"
-      .groupBy("product_name")           // Raggruppa per product_name
-      .count()                           // Conta il numero di vendite per prodotto
-      .orderBy(desc("count"))            // Ordina in ordine decrescente per conteggio
-      .limit(num)
+      .join(prodotti, Seq("product_id")) //facciamo una join sulla colonna "product_id"
+      .groupBy("product_name")           //raggruppiamo per product_name
+      .count()                           //contiamo il numero di vendite per prodotto
+      .orderBy(desc("count"))            //ordiniamo in ordine decrescente per conteggio
+      .limit(num)                        //prendiamo i primi num
     val rispostaJson = convertiRispostaInJson(topNprodotti)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
@@ -80,25 +81,50 @@ object App extends cask.MainRoutes {
 
   def prodottiPerOgniCorridoio(): DataFrame = {
     val prodOgniCorridoio = ordiniProdotti
-      .join(prodotti, "product_id")  // Uniamo i dati con la tabella dei prodotti
-      .groupBy("aisle_id", "product_name")  // Raggruppiamo per aisle_id e nome del prodotto
-      .agg(count("product_name").alias("vendite"))  // Calcoliamo il conteggio delle vendite
-      .orderBy(col("aisle_id"), desc("vendite"))  // Ordiniamo per aisle_id e vendite in ordine decrescente
+      .join(prodotti, "product_id")  //facciamo la join per ottenere il nome
+      .groupBy("aisle_id", "product_name")  //raggruppiamo per aisle_id e nome del prodotto
+      .agg(count("product_name").alias("vendite"))  //calcoliamo il conteggio delle vendite
+      .orderBy(col("aisle_id"), desc("vendite"))  //ordiniamo per aisle_id e vendite in ordine decrescente
     prodOgniCorridoio
   }
 
   @cask.get("/topProdottiPerAisle")
   def prodottoPiuVendutoPerCorridoio(): cask.Response[String] = {
-    val ppoc = prodottiPerOgniCorridoio()
+    val ppoc = prodottiPerOgniCorridoio() //calcoliamo il numero max di vendite per ogni corridoio
       .groupBy("aisle_id")
       .agg(max("vendite").alias("vendite_piu_alte"))
 
-    val prodottoPiuVenduto = prodottiPerOgniCorridoio()
+    val prodottoPiuVenduto = prodottiPerOgniCorridoio() //vediamo quale prodotto presenta quel numero di vendite per capire il prodotto più venduto
       .join(ppoc, Seq("aisle_id"))
       .filter(col("vendite") === col("vendite_piu_alte"))
       .select("aisle_id", "product_name", "vendite").orderBy(col("aisle_id").asc)
 
     val rispostaJson=convertiRispostaInJson(prodottoPiuVenduto)
+    scriviFile(rispostaJson)
+    aggiungiCORS(rispostaJson)
+  }
+
+  @cask.get("/topOrderDay")
+  def giornoConPiuOrdini(): cask.Response[String] = {
+    val giornoPiuOrdini = ordini.groupBy("order_dow")
+      .agg(count("*").alias("ordiniTotali"))
+      .orderBy(desc("ordiniTotali"))
+
+    val rispostaJson=convertiRispostaInJson(giornoPiuOrdini)
+    scriviFile(rispostaJson)
+    aggiungiCORS(rispostaJson)
+  }
+
+  @cask.get("/numeroArticoliOrdine")
+  def numeroArticoliOrdine(): cask.Response[String] = {
+    val ordiniConProdotti = ordiniProdotti
+      .groupBy("order_id")
+      .agg(count("product_id").alias("numero_articoli"))
+    val distribuzioneArticoli = ordiniConProdotti
+      .groupBy("numero_articoli")
+      .count()
+      .orderBy(asc("numero_articoli"))
+    val rispostaJson = convertiRispostaInJson(distribuzioneArticoli)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
@@ -118,75 +144,50 @@ object App extends cask.MainRoutes {
     aggiungiCORS(rispostaJson)
   }
 
-  @cask.get("/topOrderDay")
-  def giornoConPiuOrdini(): cask.Response[String] = {
-    val giornoPiuOrdini = ordini.groupBy("order_dow")
-      .agg(count("*").alias("ordiniTotali"))
-      .orderBy(desc("ordiniTotali"))
-
-    val rispostaJson=convertiRispostaInJson(giornoPiuOrdini)
-    scriviFile(rispostaJson)
-    aggiungiCORS(rispostaJson)
-  }
-
-  @cask.get("/numeroArticoliOrdine")
-  def numeroArticoliOrdine(): cask.Response[String] = {
-    val ordiniConProdotti = ordiniProdotti
-      .join(prodotti, "product_id")
-      .groupBy("order_id")
-      .agg(count("product_id").alias("numero_articoli"))
-      .orderBy(desc("numero_articoli"))
-    val distribuzioneArticoli = ordiniConProdotti
-      .groupBy("numero_articoli")
-      .count()
-      .orderBy(asc("numero_articoli"))
-    val rispostaJson = convertiRispostaInJson(distribuzioneArticoli)
-    scriviFile(rispostaJson)
-    aggiungiCORS(rispostaJson)
-  }
-
   @cask.get("/analizzaUtente/:utente")
   def analizzaUtente(utente: String): cask.Response[String] = {
     val ordiniUtente = ordini.filter($"user_id" === utente)
-    // Unisci gli ordini con i prodotti per ottenere informazioni sui prodotti acquistati
+    //uniamo gli ordini con i prodotti per ottenere informazioni sui prodotti acquistati
     val prodottiAcquistati = ordiniUtente
-      .join(ordiniProdotti, "order_id") // Unisci con la tabella ordini_prodotti per ottenere i dettagli sui prodotti
-      .join(prodotti, "product_id")    // Unisci con la tabella prodotti per ottenere il nome del prodotto
-      .select("user_id","order_id", "product_name", "order_dow", "order_hour_of_day")  // Seleziona le colonne rilevanti
+      .join(ordiniProdotti, "order_id") //facciamo la join per ottenere il product_id
+      .join(prodotti, "product_id")  //facciamo la join per ottenere il nome del prodotto
     // Raggruppa i prodotti acquistati per l'utente e conta le occorrenze di ciascun prodotto
     val prodottiRaggruppati = prodottiAcquistati
       .groupBy("user_id","product_name")
       .agg(count("product_name").alias("numero_acquisti"))
-      .orderBy(desc("numero_acquisti")) // Ordina i prodotti per numero di acquisti
+      .orderBy(desc("numero_acquisti")) //ordiniamo i prodotti per numero di acqusiti
     val rispostaJson = convertiRispostaInJson(prodottiRaggruppati)
     scriviFile(rispostaJson)
     aggiungiCORS(rispostaJson)
   }
 
   @cask.get("/regoleAssociative")
-def regoleAssociative(): cask.Response[String] = {
-  val train = ss.read.options(Map("inferSchema" -> "true", "header" -> "true"))
-    .csv("src/main/data/order_products__train.csv")
+  def regoleAssociative(): cask.Response[String] = {
+    //verifichiamo se il modello è stato gia addestrato
+    if (modello == null) {
+      val train = sparkSession.read.options(Map("inferSchema" -> "true", "header" -> "true"))
+        .csv("src/main/data/order_products__train.csv")
 
-  // Prepara i dati raggruppando i prodotti per ordine
-  val dataTrain = train.join(prodotti, "product_id")
-    .groupBy("order_id")
-    .agg(collect_set("product_name").alias("items"))
+      //facciamo la join per ottenere una lista di ordini, ciascuno con il set di prodotti acquistati in quell'ordine
+      val dataTrain = train.join(prodotti, "product_id")
+        .groupBy("order_id")
+        .agg(collect_set("product_name").alias("items"))
+      // modello FPGrouwth
+      val fpgrowth = new FPGrowth()
+        .setItemsCol("items") //la colonna items contiene i prodotti per ciascun ordine
+        .setMinSupport(0.001) //quindi la regola deve apparire almeno nello 0.1% degli ordini
+        .setMinConfidence(0.4) //la regola deve essere corretta almeno nel 40% dei casi in cui si verifica
+      modello = fpgrowth.fit(dataTrain)
+    }
 
-  // Esegui il modello FP-Growth
-  val fpgrowth = new FPGrowth()
-    .setItemsCol("items")
-    .setMinSupport(0.001)
-    .setMinConfidence(0.4)
-  modello = fpgrowth.fit(dataTrain)
+    //estraiamo le regole associative
+    val rules = modello.associationRules
 
-  // Estrai le regole associative
-  val rules = modello.associationRules
+    val rispostaJson = convertiRispostaInJson(rules)
+    scriviFile(rispostaJson)
+    aggiungiCORS(rispostaJson)
+  }
 
-  val rispostaJson=convertiRispostaInJson(rules)
-  scriviFile(rispostaJson)
-  aggiungiCORS(rispostaJson)
-}
 
   @cask.get("/predizione")
   def predizione(dati: String): cask.Response[String] = {
@@ -195,22 +196,22 @@ def regoleAssociative(): cask.Response[String] = {
       regoleAssociative()
     }
     val regole = modello.associationRules
-    // Filtra le regole di associazione dove tutti gli antecedenti sono presenti nei dati
+    //filtriamo le regole di associazione e prendiamo solo quelle dove tutti gli antecedenti sono presenti nei dati
     val proposte = regole.filter { x =>
       x.getAs[Seq[String]]("antecedent").forall(listaDati.contains)
     }
-    // Ordina in base alla confidenza e limita a 5 proposte
+    //le ordiniamo in base alla confidenza e prendiamo le prime 5 proposte
     val finale = proposte.sort(col("confidence").desc).limit(5)
 
-    // Estrai direttamente i conseguenti dalle regole e uniscili in un set
+    //prendiamo tutti i conseguenti delle regole finali
     val proposals = finale.collect().flatMap { rule =>
       val consequent = rule.getAs[Seq[String]]("consequent")
       consequent
     }.toSet
-    // Filtra le proposte per rimuovere quelle già presenti nei dati originali
+    //filtriamo le proposte in modo da rimuovere quelle già presenti nei dati originali
     val proposteFinali = proposals.filterNot(listaDati.contains)
 
-    val rdd = sc.parallelize(proposteFinali.toSeq)
+    val rdd = sparkContext.parallelize(proposteFinali.toSeq)
     val dataframe = rdd.toDF("suggestion")
     val rispostaJson= convertiRispostaInJson(dataframe)
     aggiungiCORS(rispostaJson)
@@ -228,7 +229,7 @@ def regoleAssociative(): cask.Response[String] = {
 
 @cask.get("/chiediAchat")
 def chiediAChat():cask.Response[String]= {
- //leggere il contenuto del file
+ //leggiamo il contenuto del file
   val filename = "src/main/scala/ultimaQuery.txt"
   val content = new String(Files.readAllBytes(Paths.get(filename)), StandardCharsets.UTF_8)
   val messaggio="Analizzami in modo approfondito questi dati che provengono dal sito Instacart." + content +" non usare grassetto"

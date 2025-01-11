@@ -6,7 +6,7 @@ import io.circe.parser._
 object OpenAIClient {
   val apiKey: String = "sk-proj-rKe0S8vQ96veyD4nv0qwT3BlbkFJTfMn1uTwRoqa3ZIj7BTt"
 
-  // Modelli per strutturare la richiesta e la risposta
+  //modelli per strutturare la richiesta e la risposta
   case class ChatMessage(role: String, content: String)
   case class ChatRequest(model: String, messages: List[ChatMessage], temperature: Double = 0.7)
   case class ChatResponse(choices: List[ChatChoice])
@@ -16,13 +16,13 @@ object OpenAIClient {
     val backend = HttpURLConnectionBackend()
     val url = uri"https://api.openai.com/v1/chat/completions"
 
-    // payload della richiesta
+    //payload della richiesta
     val payload = ChatRequest(
       model = "gpt-4o-mini",
       messages = List(ChatMessage("user", prompt))
     )
 
-    // richiesta HTTP POST
+    //richiesta HTTP POST
     val response = basicRequest
       .post(url)
       .header("Authorization", s"Bearer $apiKey")
@@ -30,7 +30,7 @@ object OpenAIClient {
       .body(payload.asJson.noSpaces)
       .send(backend)
 
-    // Gestione risposta
+    //gestione risposta
     response.body match {
       case Right(body) =>
         decode[ChatResponse](body) match {
