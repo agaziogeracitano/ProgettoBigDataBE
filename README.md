@@ -3,7 +3,7 @@ con API REST esposte tramite il microframework Cask, consentendo la comunicazion
 ed efficiente, garantendo elevate prestazioni anche su grandi volumi di informazioni.
 
 **Tecnologie Utilizzate**
--Apache Spark: Framework di elaborazione distribuita\n
+-Apache Spark: Framework di elaborazione distribuita
 -Scala: Linguaggio di programmazione funzionale e orientato agli oggetti
 -Cask: Microframework per l'esposizione di API REST
 -MLlib: Libreria di Machine Learning integrata in Spark
