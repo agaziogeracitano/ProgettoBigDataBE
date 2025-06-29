@@ -4,7 +4,7 @@ import io.circe.syntax._
 import io.circe.parser._
 
 object OpenAIClient {
-  val apiKey: String = "sk-proj-rKe0S8vQ96veyD4nv0qwT3BlbkFJTfMn1uTwRoqa3ZIj7BTt"
+  val apiKey: String = "chiave"
 
   //modelli per strutturare la richiesta e la risposta
   case class ChatMessage(role: String, content: String)
